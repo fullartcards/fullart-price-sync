@@ -52,5 +52,6 @@ $(BIN): $(OBJS)
 
 clean:
 	rm -rf $(BIN) $(OBJS) $(DEPS)
+	find src \( -name '*.o' -o -name '*.d' \) -delete
 
 -include $(DEPS)
