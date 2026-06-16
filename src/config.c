@@ -10,6 +10,18 @@ static const char *env_or_default(const char *name, const char *fallback)
 	return (value == NULL || value[0] == '\0') ? fallback : value;
 }
 
+static const char *default_justtcg_card_query(void)
+{
+	return
+		"SELECT p.sku AS product_id, cp.just_tcg_id AS justtcg_card_id "
+		"FROM products p "
+		"JOIN card_products cp ON cp.product_id = p.id "
+		"WHERE p.status = 'active' "
+		"AND cp.just_tcg_id IS NOT NULL "
+		"AND btrim(cp.just_tcg_id) <> '' "
+		"ORDER BY p.sku";
+}
+
 int load_config(app_config *cfg, char *err, unsigned long err_len)
 {
 	(void)err;
@@ -24,6 +36,9 @@ int load_config(app_config *cfg, char *err, unsigned long err_len)
 	cfg->marketplace_id = env_or_default("EBAY_MARKETPLACE_ID", "EBAY_US");
 	cfg->scope = env_or_default("EBAY_SCOPE", "https://api.ebay.com/oauth/api_scope");
 	cfg->justtcg_api_key = env_or_default("JUSTTCG_API_KEY", "");
+	cfg->database_url = env_or_default("PRICE_SYNC_DATABASE_URL", "");
+	cfg->justtcg_card_query = env_or_default("PRICE_SYNC_JUSTTCG_CARD_QUERY",
+		default_justtcg_card_query());
 
 	return 1;
 }
@@ -54,6 +69,23 @@ int require_justtcg_config(const app_config *cfg, char *err, unsigned long err_l
 	}
 	if (cfg->justtcg_api_key[0] == '\0') {
 		snprintf(err, err_len, "JUSTTCG_API_KEY is required");
+		return 0;
+	}
+	return 1;
+}
+
+int require_database_config(const app_config *cfg, char *err, unsigned long err_len)
+{
+	if (cfg == NULL) {
+		snprintf(err, err_len, "config is required");
+		return 0;
+	}
+	if (cfg->database_url[0] == '\0') {
+		snprintf(err, err_len, "PRICE_SYNC_DATABASE_URL is required");
+		return 0;
+	}
+	if (cfg->justtcg_card_query[0] == '\0') {
+		snprintf(err, err_len, "PRICE_SYNC_JUSTTCG_CARD_QUERY cannot be empty");
 		return 0;
 	}
 	return 1;

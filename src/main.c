@@ -1,4 +1,5 @@
 #include "config.h"
+#include "db/db.h"
 #include "ebay/ebay.h"
 #include "justtcg/justtcg.h"
 
@@ -27,13 +28,24 @@ typedef struct {
 	int ok;
 } justtcg_worker_args;
 
+typedef struct {
+	const app_config *cfg;
+	const justtcg_card_mapping_list *mappings;
+	pthread_mutex_t lock;
+	unsigned long next_index;
+	unsigned long success_count;
+	unsigned long failure_count;
+} justtcg_batch_state;
+
 static void usage(const char *program)
 {
 	fprintf(stderr,
 		"Usage:\n"
 		"  %s sync-product --product-id <id-or-sku> --ebay-query <query> --justtcg-card-id <card-id> [--limit <1-200>]\n"
 		"  %s ebay-search --product-id <id-or-sku> --query <query> [--limit <1-200>] [--raw]\n"
-		"  %s justtcg-card --product-id <id-or-sku> --card-id <justtcg-card-id> [--raw]\n",
+		"  %s justtcg-card --product-id <id-or-sku> --card-id <justtcg-card-id> [--raw]\n"
+		"  %s justtcg-sync [--workers <1-32>]\n",
+		program,
 		program,
 		program,
 		program);
@@ -121,6 +133,84 @@ static void *run_justtcg_worker(void *arg)
 
 done:
 	justtcg_card_response_free(&response);
+	return NULL;
+}
+
+static int parse_worker_count(const char *value)
+{
+	int workers;
+
+	if (value == NULL) {
+		return 4;
+	}
+	workers = atoi(value);
+	if (workers < 1 || workers > 32) {
+		return 0;
+	}
+	return workers;
+}
+
+static int fetch_justtcg_observation(const app_config *cfg, const char *product_id,
+	const char *card_id, char *output, unsigned long output_len, char *err, unsigned long err_len)
+{
+	justtcg_card_response response = {0};
+	price_observation observation = {0};
+	char detail[512] = {0};
+	int ok = 0;
+
+	if (!justtcg_get_card(cfg, card_id, &response, detail, sizeof(detail))) {
+		snprintf(err, err_len, "justtcg card error for %s: %s", product_id, detail);
+		goto done;
+	}
+	if (!justtcg_first_price_observation(product_id, response.body, &observation, detail,
+		    sizeof(detail))) {
+		snprintf(err, err_len, "justtcg parse error for %s: %s", product_id, detail);
+		goto done;
+	}
+
+	format_observation(output, output_len, &observation);
+	ok = 1;
+
+done:
+	justtcg_card_response_free(&response);
+	return ok;
+}
+
+static void *run_justtcg_batch_worker(void *arg)
+{
+	justtcg_batch_state *state = arg;
+
+	for (;;) {
+		unsigned long index;
+		const justtcg_card_mapping *mapping;
+		char output[256];
+		char err[512];
+		int ok;
+
+		pthread_mutex_lock(&state->lock);
+		index = state->next_index;
+		if (index >= state->mappings->len) {
+			pthread_mutex_unlock(&state->lock);
+			break;
+		}
+		state->next_index++;
+		pthread_mutex_unlock(&state->lock);
+
+		mapping = &state->mappings->items[index];
+		ok = fetch_justtcg_observation(state->cfg, mapping->product_id,
+			mapping->justtcg_card_id, output, sizeof(output), err, sizeof(err));
+
+		pthread_mutex_lock(&state->lock);
+		if (ok) {
+			puts(output);
+			state->success_count++;
+		} else {
+			fprintf(stderr, "%s\n", err);
+			state->failure_count++;
+		}
+		pthread_mutex_unlock(&state->lock);
+	}
+
 	return NULL;
 }
 
@@ -238,6 +328,86 @@ done:
 	return ok ? 0 : 1;
 }
 
+static int run_justtcg_sync(int argc, char **argv)
+{
+	const char *workers_raw = arg_value(argc, argv, "--workers");
+	int worker_count = parse_worker_count(workers_raw);
+	char err[512] = {0};
+	app_config cfg = {0};
+	justtcg_card_mapping_list mappings = {0};
+	justtcg_batch_state state = {0};
+	pthread_t *threads = NULL;
+	int started = 0;
+	int ok = 1;
+
+	if (worker_count == 0) {
+		fprintf(stderr, "config error: workers must be between 1 and 32\n");
+		return 1;
+	}
+	if (!load_config(&cfg, err, sizeof(err))) {
+		fprintf(stderr, "config error: %s\n", err);
+		return 1;
+	}
+	if (!require_justtcg_config(&cfg, err, sizeof(err))) {
+		fprintf(stderr, "config error: %s\n", err);
+		return 1;
+	}
+	if (!require_database_config(&cfg, err, sizeof(err))) {
+		fprintf(stderr, "config error: %s\n", err);
+		return 1;
+	}
+	if (!db_load_justtcg_card_mappings(&cfg, &mappings, err, sizeof(err))) {
+		fprintf(stderr, "database error: %s\n", err);
+		return 1;
+	}
+	if (mappings.len == 0) {
+		fprintf(stderr, "JustTCG sync found no mapped card products\n");
+		goto done;
+	}
+	if ((unsigned long)worker_count > mappings.len) {
+		worker_count = (int)mappings.len;
+	}
+
+	threads = calloc((unsigned long)worker_count, sizeof(*threads));
+	if (threads == NULL) {
+		fprintf(stderr, "runtime error: unable to allocate worker threads\n");
+		ok = 0;
+		goto done;
+	}
+
+	state.cfg = &cfg;
+	state.mappings = &mappings;
+	if (pthread_mutex_init(&state.lock, NULL) != 0) {
+		fprintf(stderr, "runtime error: unable to initialize worker lock\n");
+		ok = 0;
+		goto done;
+	}
+
+	for (int i = 0; i < worker_count; i++) {
+		if (pthread_create(&threads[i], NULL, run_justtcg_batch_worker, &state) != 0) {
+			fprintf(stderr, "thread error: unable to start JustTCG sync worker\n");
+			ok = 0;
+			break;
+		}
+		started++;
+	}
+	for (int i = 0; i < started; i++) {
+		pthread_join(threads[i], NULL);
+	}
+	pthread_mutex_destroy(&state.lock);
+
+	if (state.failure_count > 0) {
+		ok = 0;
+	}
+	fprintf(stderr, "JustTCG sync complete: %lu succeeded, %lu failed\n",
+		state.success_count, state.failure_count);
+
+done:
+	free(threads);
+	justtcg_card_mapping_list_free(&mappings);
+	return ok ? 0 : 1;
+}
+
 static int run_sync_product(int argc, char **argv)
 {
 	const char *product_id = arg_value(argc, argv, "--product-id");
@@ -338,6 +508,8 @@ int main(int argc, char **argv)
 		code = run_ebay_search(argc, argv);
 	} else if (strcmp(argv[1], "justtcg-card") == 0) {
 		code = run_justtcg_card(argc, argv);
+	} else if (strcmp(argv[1], "justtcg-sync") == 0) {
+		code = run_justtcg_sync(argc, argv);
 	} else {
 		usage(argv[0]);
 		code = 2;

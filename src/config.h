@@ -14,6 +14,10 @@ typedef struct {
 	const char *scope;
 	/* JustTCG API key from JUSTTCG_API_KEY. */
 	const char *justtcg_api_key;
+	/* PostgreSQL connection string from PRICE_SYNC_DATABASE_URL. */
+	const char *database_url;
+	/* SQL that returns product_id and justtcg_card_id columns for JustTCG sync. */
+	const char *justtcg_card_query;
 } app_config;
 
 /* Loads app_config from environment variables without validating source-specific secrets. */
@@ -24,6 +28,9 @@ int require_ebay_config(const app_config *cfg, char *err, unsigned long err_len)
 
 /* Validates the JustTCG credentials needed for JustTCG commands. */
 int require_justtcg_config(const app_config *cfg, char *err, unsigned long err_len);
+
+/* Validates the database settings needed for Postgres-backed sync commands. */
+int require_database_config(const app_config *cfg, char *err, unsigned long err_len);
 
 /* Returns the eBay REST API base URL for the configured environment. */
 const char *ebay_api_base_url(const app_config *cfg);

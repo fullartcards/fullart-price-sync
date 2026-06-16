@@ -4,3 +4,4 @@
 -Wpedantic
 -pthread
 -Isrc
+-I/opt/homebrew/opt/libpq/include
