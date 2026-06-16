@@ -26,7 +26,8 @@ daily scheduler
 make
 ```
 
-The C code uses libcurl for OAuth and Browse API HTTP calls.
+The C code uses libcurl for HTTP calls and pthreads to run source adapters
+concurrently for a product sync.
 
 ## Source layout
 
@@ -52,6 +53,32 @@ export JUSTTCG_API_KEY="..."
 
 Use `EBAY_ENV=production` when you are ready to call production eBay APIs.
 JustTCG uses `JUSTTCG_API_KEY` in the `x-api-key` request header.
+
+## Product sync
+
+Run both eBay and JustTCG for the same Full Art product id or SKU:
+
+```sh
+set -a
+source .env
+set +a
+
+make
+
+bin/fullart-price-sync sync-product \
+  --product-id "GD01-001-NM" \
+  --ebay-query "Gundam GD01-001 near mint" \
+  --justtcg-card-id "pokemon-battle-academy-fire-energy-22-charizard-stamped-promo" \
+  --limit 10
+```
+
+The command starts both source requests at the same time and prints one
+observation per successful source:
+
+```json
+{"event_id":"ebay-...","product_id":"GD01-001-NM","price":800}
+{"event_id":"justtcg-...","product_id":"GD01-001-NM","price":14}
+```
 
 ## eBay search
 
