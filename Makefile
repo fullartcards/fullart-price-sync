@@ -1,0 +1,22 @@
+CC ?= cc
+CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -O2
+CPPFLAGS += $(shell curl-config --cflags)
+LDLIBS += $(shell curl-config --libs)
+
+BIN := bin/fullart-price-sync
+SRCS := src/main.c src/config.c src/http.c src/ebay.c
+OBJS := $(SRCS:.c=.o)
+
+.PHONY: all clean
+
+all: $(BIN)
+
+$(BIN): $(OBJS)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(OBJS) $(LDLIBS) -o $@
+
+%.o: %.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(BIN) $(OBJS)
