@@ -124,3 +124,28 @@ int http_get_bearer(const char *url, const char *bearer_token, const char *marke
 	curl_easy_cleanup(curl);
 	return ok;
 }
+
+int http_get_api_key(const char *url, const char *header_name, const char *api_key,
+	http_result *result, char *err, unsigned long err_len)
+{
+	CURL *curl = curl_easy_init();
+	struct curl_slist *headers = NULL;
+	char api_header[4096];
+	int ok;
+
+	if (curl == NULL) {
+		snprintf(err, err_len, "unable to initialize curl");
+		return 0;
+	}
+
+	snprintf(api_header, sizeof(api_header), "%s: %s", header_name, api_key);
+	headers = curl_slist_append(headers, api_header);
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+	ok = perform(curl, result, err, err_len);
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+	return ok;
+}

@@ -2,8 +2,8 @@
 
 Price syncing engine for Full Art.
 
-The first target is eBay Browse API ingestion. The current v1 contract keeps the
-output intentionally small:
+The first targets are eBay Browse API and JustTCG card price ingestion. The
+current v1 contract keeps the output intentionally small:
 
 ```json
 {"event_id":"ebay-...","product_id":"1001-or-sku","price":800}
@@ -15,7 +15,7 @@ output intentionally small:
 
 ```text
 daily scheduler
-  -> source adapter, starting with eBay
+  -> source adapter
   -> minimal price observation
   -> later: gRPC ingestion into fullart-api
 ```
@@ -28,6 +28,15 @@ make
 
 The C code uses libcurl for OAuth and Browse API HTTP calls.
 
+## Source layout
+
+```text
+src/ebay/      eBay OAuth and Browse API logic
+src/justtcg/   JustTCG /v1/cards logic
+src/http.*     shared libcurl helpers
+src/config.*   shared environment config
+```
+
 ## Configuration
 
 Copy `.env.example` into your shell configuration or export the values directly:
@@ -38,9 +47,11 @@ export EBAY_CLIENT_ID="..."
 export EBAY_CLIENT_SECRET="..."
 export EBAY_MARKETPLACE_ID=EBAY_US
 export EBAY_SCOPE=https://api.ebay.com/oauth/api_scope
+export JUSTTCG_API_KEY="..."
 ```
 
 Use `EBAY_ENV=production` when you are ready to call production eBay APIs.
+JustTCG uses `JUSTTCG_API_KEY` in the `x-api-key` request header.
 
 ## eBay search
 
@@ -73,10 +84,47 @@ bin/fullart-price-sync ebay-search \
   --raw
 ```
 
+## JustTCG card lookup
+
+JustTCG card lookup calls:
+
+```text
+GET https://api.justtcg.com/v1/cards?cardId=<card-id>
+```
+
+and sends:
+
+```text
+x-api-key: <JUSTTCG_API_KEY>
+```
+
+Run it with:
+
+```sh
+set -a
+source .env
+set +a
+
+make
+
+bin/fullart-price-sync justtcg-card \
+  --product-id "GD01-001-NM" \
+  --card-id "pokemon-battle-academy-fire-energy-22-charizard-stamped-promo"
+```
+
+Print the raw JustTCG response instead:
+
+```sh
+bin/fullart-price-sync justtcg-card \
+  --product-id "GD01-001-NM" \
+  --card-id "pokemon-battle-academy-fire-energy-22-charizard-stamped-promo" \
+  --raw
+```
+
 ## Next code changes
 
 1. Add a local product-source mapping file or endpoint so the sync job can map
-   Full Art product ids/SKUs to eBay queries.
+   Full Art product ids/SKUs to eBay queries and JustTCG card ids.
 2. Parse more than the first returned price and filter bad matches before
    emitting observations.
 3. Add a gRPC or HTTP ingestion client that sends observations to `fullart-api`.

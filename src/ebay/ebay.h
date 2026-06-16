@@ -2,6 +2,7 @@
 #define FULLART_PRICE_SYNC_EBAY_H
 
 #include "config.h"
+#include "observation.h"
 
 typedef struct {
 	/* OAuth access token allocated by ebay_mint_token. */
@@ -16,15 +17,6 @@ typedef struct {
 	/* HTTP status code returned by the Browse API. */
 	long status;
 } ebay_search_response;
-
-typedef struct {
-	/* Stable daily id for a source/product/price observation. */
-	char event_id[128];
-	/* Full Art product id or SKU supplied by the caller. */
-	const char *product_id;
-	/* Normalized price in cents. */
-	long price_cents;
-} price_observation;
 
 /* Frees memory owned by an ebay_token and resets its fields. */
 void ebay_token_free(ebay_token *token);

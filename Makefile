@@ -1,11 +1,14 @@
 CC ?= cc
 CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -O2
 CPPFLAGS += $(shell curl-config --cflags)
+CPPFLAGS += -MMD -MP
+CPPFLAGS += -Isrc
 LDLIBS += $(shell curl-config --libs)
 
 BIN := bin/fullart-price-sync
-SRCS := src/main.c src/config.c src/http.c src/ebay.c
+SRCS := src/main.c src/config.c src/http.c src/ebay/ebay.c src/justtcg/justtcg.c
 OBJS := $(SRCS:.c=.o)
+DEPS := $(OBJS:.o=.d)
 
 .PHONY: all clean
 
@@ -19,4 +22,6 @@ $(BIN): $(OBJS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf $(BIN) $(OBJS)
+	rm -rf $(BIN) $(OBJS) $(DEPS)
+
+-include $(DEPS)

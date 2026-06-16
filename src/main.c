@@ -1,5 +1,6 @@
 #include "config.h"
-#include "ebay.h"
+#include "ebay/ebay.h"
+#include "justtcg/justtcg.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -10,7 +11,9 @@ static void usage(const char *program)
 {
 	fprintf(stderr,
 		"Usage:\n"
-		"  %s ebay-search --product-id <id-or-sku> --query <query> [--limit <1-200>] [--raw]\n",
+		"  %s ebay-search --product-id <id-or-sku> --query <query> [--limit <1-200>] [--raw]\n"
+		"  %s justtcg-card --product-id <id-or-sku> --card-id <justtcg-card-id> [--raw]\n",
+		program,
 		program);
 }
 
@@ -57,6 +60,10 @@ static int run_ebay_search(int argc, char **argv)
 		fprintf(stderr, "config error: %s\n", err);
 		return 1;
 	}
+	if (!require_ebay_config(&cfg, err, sizeof(err))) {
+		fprintf(stderr, "config error: %s\n", err);
+		return 1;
+	}
 
 	if (!ebay_mint_token(&cfg, &token, err, sizeof(err))) {
 		fprintf(stderr, "token error: %s\n", err);
@@ -91,6 +98,57 @@ done:
 	return ok ? 0 : 1;
 }
 
+static int run_justtcg_card(int argc, char **argv)
+{
+	const char *product_id = arg_value(argc, argv, "--product-id");
+	const char *card_id = arg_value(argc, argv, "--card-id");
+	int print_raw = has_flag(argc, argv, "--raw");
+	char err[512] = {0};
+	app_config cfg = {0};
+	justtcg_card_response response = {0};
+	price_observation observation = {0};
+	int ok = 1;
+
+	if (product_id == NULL || card_id == NULL) {
+		usage(argv[0]);
+		return 2;
+	}
+
+	if (!load_config(&cfg, err, sizeof(err))) {
+		fprintf(stderr, "config error: %s\n", err);
+		return 1;
+	}
+	if (!require_justtcg_config(&cfg, err, sizeof(err))) {
+		fprintf(stderr, "config error: %s\n", err);
+		return 1;
+	}
+
+	if (!justtcg_get_card(&cfg, card_id, &response, err, sizeof(err))) {
+		fprintf(stderr, "card error: %s\n", err);
+		ok = 0;
+		goto done;
+	}
+
+	if (print_raw) {
+		printf("%s\n", response.body);
+		goto done;
+	}
+
+	if (!justtcg_first_price_observation(product_id, response.body, &observation, err,
+		    sizeof(err))) {
+		fprintf(stderr, "parse error: %s\n", err);
+		ok = 0;
+		goto done;
+	}
+
+	printf("{\"event_id\":\"%s\",\"product_id\":\"%s\",\"price\":%ld}\n",
+		observation.event_id, observation.product_id, observation.price_cents);
+
+done:
+	justtcg_card_response_free(&response);
+	return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
 	int code;
@@ -104,6 +162,8 @@ int main(int argc, char **argv)
 
 	if (strcmp(argv[1], "ebay-search") == 0) {
 		code = run_ebay_search(argc, argv);
+	} else if (strcmp(argv[1], "justtcg-card") == 0) {
+		code = run_justtcg_card(argc, argv);
 	} else {
 		usage(argv[0]);
 		code = 2;

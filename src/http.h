@@ -27,4 +27,11 @@ int http_post_form_basic(const char *url, const char *username, const char *pass
 int http_get_bearer(const char *url, const char *bearer_token, const char *marketplace_id,
 	http_result *result, char *err, unsigned long err_len);
 
+/*
+ * Sends a GET request with a single API-key style header, for APIs like JustTCG.
+ * The caller owns result and must call http_result_free after use.
+ */
+int http_get_api_key(const char *url, const char *header_name, const char *api_key,
+	http_result *result, char *err, unsigned long err_len);
+
 #endif
