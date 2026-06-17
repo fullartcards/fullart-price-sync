@@ -4,8 +4,8 @@
 typedef struct {
 	/* Stable daily id for a source/product/price observation. */
 	char event_id[128];
-	/* Full Art product id or SKU supplied by the caller. */
-	const char *product_id;
+	/* Product identity for this source; eBay uses itemId, app-backed sources use SKU/id. */
+	char product_id[256];
 	/* Normalized price in cents. */
 	long price_cents;
 } price_observation;

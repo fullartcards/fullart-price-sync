@@ -1,8 +1,8 @@
 #ifndef FULLART_PRICE_SYNC_EBAY_H
 #define FULLART_PRICE_SYNC_EBAY_H
 
-#include "../config.h"
-#include "../observation.h"
+#include "config.h"
+#include "observation.h"
 
 typedef struct {
 	/* OAuth access token allocated by ebay_mint_token. */
@@ -18,11 +18,19 @@ typedef struct {
 	long status;
 } ebay_search_response;
 
+typedef struct {
+	price_observation *items;
+	unsigned long len;
+} ebay_price_observation_list;
+
 /* Frees memory owned by an ebay_token and resets its fields. */
 void ebay_token_free(ebay_token *token);
 
 /* Frees memory owned by an ebay_search_response and resets its fields. */
 void ebay_search_response_free(ebay_search_response *response);
+
+/* Frees memory owned by an eBay price observation list. */
+void ebay_price_observation_list_free(ebay_price_observation_list *list);
 
 /* Mints an eBay OAuth client-credentials access token. Returns 1 on success. */
 int ebay_mint_token(const app_config *cfg, ebay_token *token, char *err, unsigned long err_len);
@@ -32,10 +40,10 @@ int ebay_search(const app_config *cfg, const ebay_token *token, const char *quer
 	ebay_search_response *response, char *err, unsigned long err_len);
 
 /*
- * Extracts the first returned eBay item price into the minimal Full Art price observation.
- * Returns 0 when the response has no priced items or cannot be parsed.
+ * Extracts priced eBay item summaries into minimal price observations.
+ * Each emitted product_id is the eBay itemId from that summary.
  */
-int ebay_first_price_observation(const char *product_id, const char *search_body,
-	price_observation *observation, char *err, unsigned long err_len);
+int ebay_price_observations(const char *search_body, ebay_price_observation_list *list,
+	char *err, unsigned long err_len);
 
 #endif

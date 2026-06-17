@@ -11,10 +11,9 @@
 
 typedef struct {
 	const app_config *cfg;
-	const char *product_id;
 	const char *query;
 	int limit;
-	char output[256];
+	char *output;
 	char err[512];
 	int ok;
 } ebay_worker_args;
@@ -42,7 +41,7 @@ static void usage(const char *program)
 	fprintf(stderr,
 		"Usage:\n"
 		"  %s sync-product --product-id <id-or-sku> --ebay-query <query> --justtcg-card-id <card-id> [--limit <1-200>]\n"
-		"  %s ebay-search --product-id <id-or-sku> --query <query> [--limit <1-200>] [--raw]\n"
+		"  %s ebay-search --query <query> [--limit <1-200>] [--raw]\n"
 		"  %s justtcg-card --product-id <id-or-sku> --card-id <justtcg-card-id> [--raw]\n"
 		"  %s justtcg-sync [--workers <1-32>]\n",
 		program,
@@ -77,12 +76,55 @@ static void format_observation(char *dst, unsigned long dst_len, const price_obs
 		observation->event_id, observation->product_id, observation->price_cents);
 }
 
+static int append_observation_line(char **dst, unsigned long *dst_len,
+	const price_observation *observation, char *err, unsigned long err_len)
+{
+	char line[256];
+	char *next;
+	unsigned long line_len;
+
+	format_observation(line, sizeof(line), observation);
+	line_len = strlen(line);
+	next = realloc(*dst, *dst_len + line_len + 2);
+	if (next == NULL) {
+		snprintf(err, err_len, "unable to allocate observation output");
+		return 0;
+	}
+	*dst = next;
+	memcpy(*dst + *dst_len, line, line_len);
+	*dst_len += line_len;
+	(*dst)[(*dst_len)++] = '\n';
+	(*dst)[*dst_len] = '\0';
+	return 1;
+}
+
+static int format_ebay_observation_lines(const char *search_body, char **output,
+	char *err, unsigned long err_len)
+{
+	ebay_price_observation_list observations = {0};
+	unsigned long output_len = 0;
+
+	*output = NULL;
+	if (!ebay_price_observations(search_body, &observations, err, err_len)) {
+		return 0;
+	}
+	for (unsigned long i = 0; i < observations.len; i++) {
+		if (!append_observation_line(output, &output_len, &observations.items[i], err, err_len)) {
+			free(*output);
+			*output = NULL;
+			ebay_price_observation_list_free(&observations);
+			return 0;
+		}
+	}
+	ebay_price_observation_list_free(&observations);
+	return 1;
+}
+
 static void *run_ebay_worker(void *arg)
 {
 	ebay_worker_args *worker = arg;
 	ebay_token token = {0};
 	ebay_search_response response = {0};
-	price_observation observation = {0};
 	char err[512] = {0};
 
 	worker->ok = 0;
@@ -95,13 +137,11 @@ static void *run_ebay_worker(void *arg)
 		snprintf(worker->err, sizeof(worker->err), "ebay search error: %s", err);
 		goto done;
 	}
-	if (!ebay_first_price_observation(worker->product_id, response.body, &observation, err,
-		    sizeof(err))) {
+	if (!format_ebay_observation_lines(response.body, &worker->output, err, sizeof(err))) {
 		snprintf(worker->err, sizeof(worker->err), "ebay parse error: %s", err);
 		goto done;
 	}
 
-	format_observation(worker->output, sizeof(worker->output), &observation);
 	worker->ok = 1;
 
 done:
@@ -216,7 +256,6 @@ static void *run_justtcg_batch_worker(void *arg)
 
 static int run_ebay_search(int argc, char **argv)
 {
-	const char *product_id = arg_value(argc, argv, "--product-id");
 	const char *query = arg_value(argc, argv, "--query");
 	const char *limit_raw = arg_value(argc, argv, "--limit");
 	int limit = limit_raw == NULL ? 10 : atoi(limit_raw);
@@ -225,11 +264,10 @@ static int run_ebay_search(int argc, char **argv)
 	app_config cfg = {0};
 	ebay_token token = {0};
 	ebay_search_response response = {0};
-	price_observation observation = {0};
-	char output[256];
+	char *output = NULL;
 	int ok = 1;
 
-	if (product_id == NULL || query == NULL) {
+	if (query == NULL) {
 		usage(argv[0]);
 		return 2;
 	}
@@ -260,17 +298,16 @@ static int run_ebay_search(int argc, char **argv)
 		goto done;
 	}
 
-	if (!ebay_first_price_observation(product_id, response.body, &observation, err,
-		    sizeof(err))) {
+	if (!format_ebay_observation_lines(response.body, &output, err, sizeof(err))) {
 		fprintf(stderr, "parse error: %s\n", err);
 		ok = 0;
 		goto done;
 	}
 
-	format_observation(output, sizeof(output), &observation);
-	printf("%s\n", output);
+	printf("%s", output);
 
 done:
+	free(output);
 	ebay_search_response_free(&response);
 	ebay_token_free(&token);
 	return ok ? 0 : 1;
@@ -447,7 +484,6 @@ static int run_sync_product(int argc, char **argv)
 	}
 
 	ebay_args.cfg = &cfg;
-	ebay_args.product_id = product_id;
 	ebay_args.query = ebay_query;
 	ebay_args.limit = limit;
 	justtcg_args.cfg = &cfg;
@@ -476,7 +512,7 @@ done:
 	}
 
 	if (ebay_args.ok) {
-		printf("%s\n", ebay_args.output);
+		printf("%s", ebay_args.output);
 	} else if (ebay_started) {
 		fprintf(stderr, "%s\n", ebay_args.err);
 		ok = 0;
@@ -488,6 +524,7 @@ done:
 		ok = 0;
 	}
 
+	free(ebay_args.output);
 	return ok ? 0 : 1;
 }
 

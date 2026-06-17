@@ -1,6 +1,6 @@
 #include "ebay.h"
 
-#include "../http.h"
+#include "http.h"
 
 #include <curl/curl.h>
 #include <ctype.h>
@@ -9,41 +9,44 @@
 #include <string.h>
 #include <time.h>
 
-static char *json_string_value(const char *json, const char *key)
+static char *json_string_value_range(const char *json, const char *range_end, const char *key)
 {
 	char needle[128];
 	const char *p;
 	const char *start;
-	const char *end;
+	const char *value_end;
 	char *out;
 	unsigned long len;
 
 	snprintf(needle, sizeof(needle), "\"%s\"", key);
 	p = strstr(json, needle);
-	if (p == NULL) {
+	if (p == NULL || (range_end != NULL && p >= range_end)) {
 		return NULL;
 	}
 	p = strchr(p + strlen(needle), ':');
-	if (p == NULL) {
+	if (p == NULL || (range_end != NULL && p >= range_end)) {
 		return NULL;
 	}
 	p++;
-	while (*p != '\0' && isspace((unsigned char)*p)) {
+	while (*p != '\0' && (range_end == NULL || p < range_end) && isspace((unsigned char)*p)) {
 		p++;
 	}
-	if (*p != '"') {
+	if ((range_end != NULL && p >= range_end) || *p != '"') {
 		return NULL;
 	}
 	start = p + 1;
-	end = start;
-	while (*end != '\0' && *end != '"') {
-		end++;
+	value_end = start;
+	while (*value_end != '\0' && *value_end != '"') {
+		if (range_end != NULL && value_end >= range_end) {
+			return NULL;
+		}
+		value_end++;
 	}
-	if (*end != '"') {
+	if (*value_end != '"') {
 		return NULL;
 	}
 
-	len = (unsigned long)(end - start);
+	len = (unsigned long)(value_end - start);
 	out = malloc(len + 1);
 	if (out == NULL) {
 		return NULL;
@@ -51,6 +54,11 @@ static char *json_string_value(const char *json, const char *key)
 	memcpy(out, start, len);
 	out[len] = '\0';
 	return out;
+}
+
+static char *json_string_value(const char *json, const char *key)
+{
+	return json_string_value_range(json, NULL, key);
 }
 
 static long json_long_value(const char *json, const char *key)
@@ -123,6 +131,16 @@ void ebay_search_response_free(ebay_search_response *response)
 	free(response->body);
 	response->body = NULL;
 	response->status = 0;
+}
+
+void ebay_price_observation_list_free(ebay_price_observation_list *list)
+{
+	if (list == NULL) {
+		return;
+	}
+	free(list->items);
+	list->items = NULL;
+	list->len = 0;
 }
 
 int ebay_mint_token(const app_config *cfg, ebay_token *token, char *err, unsigned long err_len)
@@ -226,48 +244,104 @@ done:
 	return ok;
 }
 
-int ebay_first_price_observation(const char *product_id, const char *search_body,
-	price_observation *observation, char *err, unsigned long err_len)
+static int append_ebay_observation(ebay_price_observation_list *list, const char *item_id,
+	long price_cents, const char *observed_date, char *err, unsigned long err_len)
 {
-	char *price_value = json_string_value(search_body, "value");
+	price_observation *next;
+	price_observation *observation;
 	char hash_input[512];
+
+	next = realloc(list->items, (list->len + 1) * sizeof(*list->items));
+	if (next == NULL) {
+		snprintf(err, err_len, "unable to allocate eBay observation list");
+		return 0;
+	}
+	list->items = next;
+	observation = &list->items[list->len];
+
+	snprintf(hash_input, sizeof(hash_input), "ebay|%s|%ld|%s", item_id, price_cents,
+		observed_date);
+	snprintf(observation->event_id, sizeof(observation->event_id), "ebay-%016llx",
+		fnv1a(hash_input));
+	snprintf(observation->product_id, sizeof(observation->product_id), "%s", item_id);
+	observation->price_cents = price_cents;
+	list->len++;
+	return 1;
+}
+
+int ebay_price_observations(const char *search_body, ebay_price_observation_list *list,
+	char *err, unsigned long err_len)
+{
+	const char *array_start;
+	const char *cursor;
 	time_t now;
 	struct tm observed_day;
 	char observed_date[9];
-	long price_cents;
 
-	if (price_value == NULL) {
-		if (json_long_value(search_body, "total") == 0 || strstr(search_body, "\"itemSummaries\"") == NULL) {
-			snprintf(err, err_len,
-				"eBay search returned no priced items; use production data or broaden the query");
-		} else {
-			snprintf(err, err_len,
-				"eBay response included item summaries but no price.value field; rerun with --raw to inspect it");
-		}
+	if (list == NULL) {
+		snprintf(err, err_len, "eBay observation list is required");
+		return 0;
+	}
+	list->items = NULL;
+	list->len = 0;
+
+	array_start = strstr(search_body, "\"itemSummaries\"");
+	if (json_long_value(search_body, "total") == 0 || array_start == NULL) {
+		snprintf(err, err_len,
+			"eBay search returned no priced items; use production data or broaden the query");
 		return 0;
 	}
 
-	price_cents = money_to_cents(price_value);
-	if (price_cents <= 0) {
-		snprintf(err, err_len, "eBay response price.value was not a positive amount");
-		free(price_value);
+	array_start = strchr(array_start, '[');
+	if (array_start == NULL) {
+		snprintf(err, err_len, "eBay response included itemSummaries but not an array");
 		return 0;
 	}
+	cursor = array_start;
 
 	now = time(NULL);
 	if (gmtime_r(&now, &observed_day) == NULL ||
 		strftime(observed_date, sizeof(observed_date), "%Y%m%d", &observed_day) == 0) {
 		snprintf(err, err_len, "unable to build observation date");
-		free(price_value);
 		return 0;
 	}
-	snprintf(hash_input, sizeof(hash_input), "ebay|%s|%ld|%s", product_id, price_cents,
-		observed_date);
-	snprintf(observation->event_id, sizeof(observation->event_id), "ebay-%016llx",
-		fnv1a(hash_input));
-	observation->product_id = product_id;
-	observation->price_cents = price_cents;
 
-	free(price_value);
+	for (;;) {
+		const char *item_start = strstr(cursor, "\"itemId\"");
+		const char *next_item;
+		char *item_id;
+		char *price_value;
+		long price_cents;
+
+		if (item_start == NULL) {
+			break;
+		}
+		next_item = strstr(item_start + strlen("\"itemId\""), "\"itemId\"");
+		item_id = json_string_value_range(item_start, next_item, "itemId");
+		price_value = json_string_value_range(item_start, next_item, "value");
+		if (item_id != NULL && price_value != NULL) {
+			price_cents = money_to_cents(price_value);
+			if (price_cents > 0 &&
+				!append_ebay_observation(list, item_id, price_cents, observed_date,
+					err, err_len)) {
+				free(item_id);
+				free(price_value);
+				ebay_price_observation_list_free(list);
+				return 0;
+			}
+		}
+		free(item_id);
+		free(price_value);
+		cursor = next_item == NULL ? item_start + strlen("\"itemId\"") : next_item;
+		if (next_item == NULL) {
+			break;
+		}
+	}
+
+	if (list->len == 0) {
+		snprintf(err, err_len,
+			"eBay response included item summaries but no priced itemId entries; rerun with --raw to inspect it");
+		return 0;
+	}
 	return 1;
 }

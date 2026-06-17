@@ -178,7 +178,7 @@ int justtcg_first_price_observation(const char *product_id, const char *card_bod
 		observed_date);
 	snprintf(observation->event_id, sizeof(observation->event_id), "justtcg-%016llx",
 		fnv1a(hash_input));
-	observation->product_id = product_id;
+	snprintf(observation->product_id, sizeof(observation->product_id), "%s", product_id);
 	observation->price_cents = price_cents;
 	return 1;
 }

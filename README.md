@@ -6,7 +6,7 @@ The first targets are eBay Browse API and JustTCG card price ingestion. The
 current v1 contract keeps the output intentionally small:
 
 ```json
-{"event_id":"ebay-...","product_id":"1001-or-sku","price":800}
+{"event_id":"ebay-...","product_id":"v1|1234567890|0","price":800}
 ```
 
 `price` is stored as integer cents.
@@ -78,7 +78,8 @@ numeric product ids instead of SKUs or if you move mappings to another table.
 
 ## Product sync
 
-Run both eBay and JustTCG for the same Full Art product id or SKU:
+Run eBay and JustTCG concurrently. The supplied `--product-id` is used for
+JustTCG; eBay emits its own `itemId` as `product_id`.
 
 ```sh
 set -a
@@ -95,10 +96,11 @@ bin/fullart-price-sync sync-product \
 ```
 
 The command starts both source requests at the same time and prints one
-observation per successful source:
+observation per successful source item. eBay can print multiple observations
+because Browse API search can return many item summaries:
 
 ```json
-{"event_id":"ebay-...","product_id":"GD01-001-NM","price":800}
+{"event_id":"ebay-...","product_id":"v1|1234567890|0","price":800}
 {"event_id":"justtcg-...","product_id":"GD01-001-NM","price":14}
 ```
 
@@ -112,10 +114,13 @@ set +a
 make
 
 bin/fullart-price-sync ebay-search \
-  --product-id "GD01-001-NM" \
   --query "Gundam GD01-001 near mint" \
   --limit 10
 ```
+
+The eBay observation uses the first result's `itemId` as `product_id`.
+When `--limit` is greater than 1, the command prints one JSON line for each
+priced eBay item returned.
 
 Print the raw eBay response instead:
 
@@ -127,7 +132,6 @@ set +a
 make
 
 bin/fullart-price-sync ebay-search \
-  --product-id 1001 \
   --query "Gundam GD01-001 near mint" \
   --limit 10 \
   --raw
