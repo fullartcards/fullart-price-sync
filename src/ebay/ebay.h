@@ -1,8 +1,8 @@
 #ifndef FULLART_PRICE_SYNC_EBAY_H
 #define FULLART_PRICE_SYNC_EBAY_H
 
-#include "config.h"
-#include "observation.h"
+#include "../config.h"
+#include "../observation.h"
 
 typedef struct {
 	/* OAuth access token allocated by ebay_mint_token. */

@@ -1,6 +1,6 @@
 #include "ebay.h"
 
-#include "http.h"
+#include "../http.h"
 
 #include <curl/curl.h>
 #include <ctype.h>

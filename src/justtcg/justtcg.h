@@ -1,7 +1,7 @@
 #ifndef FULLART_PRICE_SYNC_JUSTTCG_H
 #define FULLART_PRICE_SYNC_JUSTTCG_H
 
-#include "config.h"
+#include "../config.h"
 #include "observation.h"
 
 typedef struct {
